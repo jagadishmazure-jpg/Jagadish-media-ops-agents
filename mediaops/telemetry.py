@@ -97,7 +97,6 @@ def seed(con: sqlite3.Connection) -> None:
         for day in range(1, DAYS + 1):
             impressions = rng.randint(8000, 15000)
             # Fatigue anchor: CTR decays linearly from base to ~45% of base.
-            ctr = base_ctr
             if fatigued:
                 ctr = base_ctr * (1.0 - 0.55 * (day - 1) / (DAYS - 1))
             else:

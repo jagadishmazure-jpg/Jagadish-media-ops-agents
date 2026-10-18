@@ -21,19 +21,19 @@ def _intents():
         # specific intents first (ordering matters — see tests)
         ("creative_fatigue",
          re.compile(r"fatigue|decaying|worn out|ctr decay", re.IGNORECASE),
-         lambda q: _creative_fatigue(q)),
+         _creative_fatigue),
         ("budget_pacing",
          re.compile(r"pacing|on track|overspend|underspend|budget.*(status|pace)", re.IGNORECASE),
-         lambda q: _budget_pacing(q)),
+         _budget_pacing),
         ("campaign_roas",
          re.compile(r"\broas\b|return on ad|revenue", re.IGNORECASE),
-         lambda q: _campaign_roas(q)),
+         _campaign_roas),
         ("audience_performance",
          re.compile(r"audience|segment", re.IGNORECASE),
-         lambda q: _audience_performance(q)),
+         _audience_performance),
         ("spend_anomalies",
          re.compile(r"anomal|spike|unusual spend", re.IGNORECASE),
-         lambda q: _spend_anomalies(q)),
+         _spend_anomalies),
     ]
 
 
