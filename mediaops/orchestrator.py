@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from . import fatigue, reallocate, sop_rag, text2sql
 from .audit import AuditLog
-from .escalation import ConfirmationGate, classify_tier
+from .escalation import ConfirmationGate
 
 
 class Orchestrator:
@@ -45,8 +45,11 @@ class Orchestrator:
             self.audit.record("reallocate", "plan",
                               {"moves": len(plan["moves"])})
             for m in plan["moves"]:
-                g = self.gate.request("budget_shift", {
-                    "amount_pct": 0.25, "move": m})
+                # SOP-01: a single shift above 20% of *a* campaign's budget
+                # (donor or recipient) needs approval; use the real size.
+                pct = reallocate.move_pct(self.conn, m)
+                g = self.gate.request("budget_shift", {"amount_pct": pct, "move": m})
+                m["amount_pct"] = round(pct, 4)
                 m["gate"] = g
 
         # Fatigue detector.

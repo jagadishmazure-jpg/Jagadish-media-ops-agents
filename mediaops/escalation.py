@@ -12,6 +12,7 @@ campaign pause/resume always go through the gate.
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -50,14 +51,34 @@ class ConfirmationGate:
                              detail.get("amount_pct", 0.0)
                              if isinstance(detail, dict) else 0.0)
         if tier in ("T3", "T4"):
-            approved = False
-            if self.approver is not None:
-                try:
-                    approved = bool(self.approver(f"{action}: {detail}"))
-                except Exception:
-                    approved = False
+            approved, timed_out = self._ask(f"{action}: {detail}")
+            if approved:
+                reason = "approved by human"
+            elif timed_out:
+                reason = f"denied: no answer within {self.timeout_s}s (GATE-TIMEOUT-01) — fail-closed"
+            else:
+                reason = "denied (no approver, refusal or error) — fail-closed"
             return {"action": action, "tier": tier, "approved": approved,
-                    "reason": "approved by human" if approved
-                    else "denied (no approver or timeout) — fail-closed"}
+                    "timed_out": timed_out, "reason": reason}
         return {"action": action, "tier": tier, "approved": True,
                 "reason": "below confirmation threshold"}
+
+    def _ask(self, prompt: str) -> tuple[bool, bool]:
+        """Return (approved, timed_out). The approver runs in a daemon thread so
+        a hung approver cannot hold the action open past ``timeout_s``."""
+        if self.approver is None:
+            return False, False
+        box: dict = {}
+
+        def _run():
+            try:
+                box["ok"] = self.approver(prompt) is True
+            except Exception:
+                box["ok"] = False
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        t.join(self.timeout_s)
+        if t.is_alive():
+            return False, True
+        return bool(box.get("ok")), False

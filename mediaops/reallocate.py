@@ -62,6 +62,8 @@ def plan_reallocation(conn: sqlite3.Connection) -> dict:
         total_roas = sum(r["roas"] or 0.0 for r in recipients) or 1.0
         for r in recipients:
             rcid = r["campaign_id"]
+            if (r["roas"] or 0.0) <= (d["roas"] or 0.0):
+                continue  # no gain from moving spend to an equal/lower ROAS (REALLOC-GAIN-01)
             share = round(amount * (r["roas"] or 0.0) / total_roas, 2)
             cap = budgets[rcid] * MAX_GAIN_PCT - gains[rcid]
             share = round(min(share, max(cap, 0.0)), 2)
@@ -82,3 +84,13 @@ def plan_reallocation(conn: sqlite3.Connection) -> dict:
     total = round(sum(m["amount"] for m in moves), 2)
     return {"moves": moves, "total_shifted": total,
             "donors": len(donors), "recipients": len(recipients)}
+
+
+def move_pct(conn: sqlite3.Connection, move: dict) -> float:
+    """Size of one move as a share of the larger-affected campaign budget:
+    max(amount / donor budget, amount / recipient budget)."""
+    budgets = dict(conn.execute(
+        "SELECT campaign_id, budget_total FROM campaigns WHERE campaign_id IN (?, ?)",
+        (move["from_campaign"], move["to_campaign"])).fetchall())
+    return max(move["amount"] / budgets[move["from_campaign"]],
+               move["amount"] / budgets[move["to_campaign"]])

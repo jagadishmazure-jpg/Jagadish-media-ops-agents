@@ -7,7 +7,7 @@ All logic lives in mediaops.demo_helpers (stdlib, fully tested).
 try:
     import streamlit as st
 except ImportError:  # pragma: no cover
-    raise SystemExit("pip install streamlit, then run: streamlit run demo/app.py")
+    raise SystemExit("pip install streamlit, then run: streamlit run demo/app.py") from None
 
 from mediaops import demo_helpers
 

@@ -22,18 +22,21 @@ AVG_ORDER_VALUE = 50.0
 
 _CAMPAIGNS = [
     # (id, name, status, budget_total, start_day, end_day)
-    ("CMP-001", "Summer Launch", "active", 50000.0, 1, 30),
-    ("CMP-002", "Brand Awareness", "active", 30000.0, 1, 30),
+    # Budgets sized to the spend the telemetry actually generates, so the
+    # pacing view shows a real mix (on track / over / under) instead of
+    # flagging every campaign (MEDIA-SEED-01, review 2026-10-18).
+    ("CMP-001", "Summer Launch", "active", 13500.0, 1, 30),
+    ("CMP-002", "Brand Awareness", "active", 10000.0, 1, 30),
     ("CMP-003", "Retargeting Push", "active", 20000.0, 5, 30),
     ("CMP-004", "Holiday Teaser", "paused", 10000.0, 20, 45),
 ]
 
 _AD_SETS = [
     # (id, campaign_id, name, audience, budget)
-    ("AS-001", "CMP-001", "Summer Prospecting", "18-34 Urban", 30000.0),
-    ("AS-002", "CMP-001", "Summer Lookalike", "Lookalike Purchasers", 20000.0),
-    ("AS-003", "CMP-002", "Brand Reach 25-44", "25-44 Suburban", 18000.0),
-    ("AS-004", "CMP-002", "Brand Video", "18-34 Urban", 12000.0),
+    ("AS-001", "CMP-001", "Summer Prospecting", "18-34 Urban", 8100.0),
+    ("AS-002", "CMP-001", "Summer Lookalike", "Lookalike Purchasers", 5400.0),
+    ("AS-003", "CMP-002", "Brand Reach 25-44", "25-44 Suburban", 6000.0),
+    ("AS-004", "CMP-002", "Brand Video", "18-34 Urban", 4000.0),
     ("AS-005", "CMP-003", "Cart Abandoners", "Site Visitors 30d", 12000.0),
     ("AS-006", "CMP-003", "Past Purchasers", "Lookalike Purchasers", 8000.0),
     ("AS-007", "CMP-004", "Holiday Early", "25-44 Suburban", 10000.0),
@@ -89,7 +92,8 @@ def seed(con: sqlite3.Connection) -> None:
         cur.execute(
             "INSERT INTO creatives VALUES (?,?,?,?)", (cid, asid, name, fmt)
         )
-    for cid, asid, name, fmt, base_ctr, fatigued in _CREATIVES:
+    start = {a[0]: next(c[4] for c in _CAMPAIGNS if c[0] == a[1]) for a in _AD_SETS}
+    for cid, asid, _name, _fmt, base_ctr, fatigued in _CREATIVES:
         for day in range(1, DAYS + 1):
             impressions = rng.randint(8000, 15000)
             # Fatigue anchor: CTR decays linearly from base to ~45% of base.
@@ -105,6 +109,8 @@ def seed(con: sqlite3.Connection) -> None:
             if asid in ("AS-001", "AS-002"):
                 conv_rate = 0.06
             conversions = max(0, int(clicks * conv_rate * rng.uniform(0.8, 1.2)))
+            if day < start[asid]:
+                continue  # no delivery before the campaign starts (MEDIA-SEED-01)
             cur.execute(
                 "INSERT INTO creative_daily VALUES (?,?,?,?,?,?)",
                 (cid, day, impressions, clicks, spend, conversions),

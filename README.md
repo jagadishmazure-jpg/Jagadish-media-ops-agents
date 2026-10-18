@@ -20,9 +20,10 @@ marketplace-seller, property-ops, contract-lifecycle, food-ingredients-ops).
   text-to-SQL on read-only views, a budget-reallocation engine, a
   creative-fatigue detector, SOP retrieval, and a strict SQLite authorizer
   backstop on every query.
-- **Proof:** 65 tests green; real run: CMP-001 at **5.73 ROAS**,
-  CRT-007 flagged fatigued at **34.4% CTR decay**, reallocation plan moves
-  **$6,000** from CMP-002 (ROAS 1.33) to CMP-001/CMP-003 with guardrails.
+- **Proof:** all tests green (real total below); real run: CMP-001 at
+  **5.73 ROAS**, CMP-002 **overspending** (pacing 1.36), CRT-007 flagged
+  fatigued at **34.4% CTR decay**, reallocation plan moves **$2,000** from
+  CMP-002 (ROAS 1.33) to CMP-003 and CMP-001, each move gated by its real size.
 
 ## How it works
 
@@ -43,13 +44,26 @@ marketplace-seller, property-ops, contract-lifecycle, food-ingredients-ops).
 
 ## Real code excerpts and output
 
-Budget reallocation (real run):
+Pacing, ROAS and budget reallocation (rendered from a fresh run in CI):
 
+<!-- run: python scripts/show_differentiator.py -->
+```text
+pacing CMP-002 ratio=1.36 overspending
+pacing CMP-001 ratio=1.01 on_track
+pacing CMP-003 ratio=0.46 underspending
+pacing CMP-004 ratio=None paused
+roas   CMP-001 5.73
+roas   CMP-003 3.27
+roas   CMP-002 1.33
+roas   CMP-004 None
+move   CMP-002 -> CMP-003 $726.67
+move   CMP-002 -> CMP-001 $1,273.33
 ```
-$6,000.00 total shift, 2 moves:
-  CMP-002 -> CMP-003  $2,205.30  (ROAS 1.33 -> 3.33)
-  CMP-002 -> CMP-001  $3,794.70  (ROAS 1.33 -> 5.73)
-```
+<!-- /run -->
+
+CMP-004 is paused, so it is reported as `paused` and has no ROAS (no spend
+in the window). Each move above is 7.3% and 12.7% of the larger affected
+budget, so both go through the T2 gate; a move above 20% needs a human (T3).
 
 Fatigue scan (real run):
 
@@ -62,25 +76,37 @@ Gateway denial (real run):
 
 ```
 >>> run_query(conn, "SELECT * FROM campaigns, v_campaign_roas")
-GatewayError: SEC-SELECT-03: only published views may be queried
+GatewayError: SEC-SELECT-03: only published views may be queried, blocked: campaigns
 ```
 
-## How this differs from coldchain/retail
+## How this differs from the marketplace and retail repos
 
-Coldchain and retail are **logistics** showcases (telemetry, compliance,
-slotting). This repo is a **media-monetization** showcase: the scarce
-resource is ad spend, the optimization is ROAS-weighted reallocation, and
-the decay signal is creative fatigue — a time-series pattern with no
-logistics analogue. The gateway here ships the strict view-aware SQLite
-authorizer from the start (see `docs/adr/0001-sqlite-authorizer-backstop.md`).
+| Repo | Scarce resource / core logic | Media concepts present? |
+|---|---|---|
+| `Jagadish-marketplace-seller-agents` | Listing quality scores, dispute triage, seller policy compliance | No campaigns, spend, ROAS or creatives |
+| `Jagadish-retail-ops-agents` | Store inventory, replenishment, slotting | No ad spend or pacing |
+| `Jagadish-coldchain-logistics-agents` | Temperature telemetry and shipment compliance | None |
+| **this repo** | **Ad spend**: pacing against flight dates, ROAS-ranked reallocation, creative-fatigue decay | — |
+
+I checked the code of the marketplace and retail repos for campaign, ROAS,
+pacing and creative logic: there is none, so the overlap is only the shared
+spine (gateway, audit, orchestrator pattern). The gateway uses the
+portfolio's strict view-aware SQLite authorizer (see
+`docs/adr/0001-sqlite-authorizer-backstop.md`).
 
 ## How to run
 
 ```bash
-python3 -m pytest tests/ -q          # 65 tests, stdlib only
+python3 -m pytest tests/ -q          # stdlib only
 python3 scripts/count_tests.py       # prints the real total
 pip install streamlit && streamlit run demo/app.py
 ```
+
+<!-- run: python scripts/count_tests.py -->
+```text
+94 tests collected
+```
+<!-- /run -->
 
 ## Guardrails and security controls
 
@@ -89,14 +115,19 @@ pip install streamlit && streamlit run demo/app.py
   FROM/JOIN view allowlist.
 - **Strict SQLite authorizer backstop** (`mediaops/authz.py`): base-table
   reads allowed only on behalf of an allowed view (via the authorizer's
-  `source` argument); schema tables, writes, PRAGMA, ATTACH denied.
-  See `docs/adr/0001-sqlite-authorizer-backstop.md`.
+  `source` argument); schema tables, `load_extension`, writes, PRAGMA,
+  ATTACH denied. `tests/test_authorizer_strict.py` proves it with the text
+  check switched off. Known residual: a column-free `count(*)` on a base
+  table can reveal a row count, never values; the text check blocks the
+  plain form. See `docs/adr/0001-sqlite-authorizer-backstop.md`.
 - **Fetch-time row cap**: `fetchmany(ROW_CAP + 1)`; never `fetchall()` on
   the planner path; no LIMIT rewriting.
-- **Confirmation gates**: budget shifts >20% (T3) and campaign pauses (T4)
-  are fail-closed without a human approver.
+- **Confirmation gates**: budget shifts >20% of the affected budget (T3)
+  and campaign pauses (T4) are fail-closed: no approver, an approver that
+  times out, or any answer other than `True` means denied.
 - **PII scrubbing** before feedback storage: `(555) 123-4567`,
-  `+1 (555) 123-4567`, `555.123.4567`, SSNs; dates untouched.
+  `+1 (555) 123-4567`, `555.123.4567`, SSNs, card numbers (grouped or
+  not); dates and counts untouched.
 - **Hash-chained audit** with tamper detection on every turn.
 
 ## Limitations and known failures
@@ -117,7 +148,27 @@ pip install streamlit && streamlit run demo/app.py
 | PII-scrubbed feedback, Streamlit demo | Built |
 | knowledge/ docs, ADRs, threat model | Built |
 | Live policy-feed connector | Planned |
-| CI workflows (`ci.yml` present, runs on push) | Written-not-run |
+| CI (tests, ruff, docs check, brand check, CodeQL) | Built, runs on push |
+
+## Standardization review (2026-10-18)
+
+Bugs found in review and fixed, each with a regression test in
+`tests/test_mediaops.py` (section "review fixes"):
+
+| ID | Bug | Fix |
+|---|---|---|
+| MEDIA-SEED-01 | Seed data had spend before a campaign's start day, and budgets were scaled so every campaign was flagged as an anomaly | Delivery starts on the start day; budgets match the 14-day plan |
+| PACE-01 | Paused CMP-004 was reported as overspending with a negative expected spend | Expected spend clamped to the flight window; `paused` and `not_started` statuses |
+| ANOM-01 | "Spend anomalies" listed on-track campaigns | Only over- and under-spending |
+| GATE-SIZE-01 | The gate always used a hard-coded 25% move size, so every move was T3 | Real move size: amount / the larger affected budget |
+| GATE-TIMEOUT-01 | The documented approver timeout was not implemented; a hung approver hung the agent | Approver runs with a timeout; timeout means denied |
+| GATE-TRUE-01 | Any truthy answer approved, so the string `"no"` approved a pause | Only `True` approves |
+| REALLOC-GAIN-01 | Money could move to a campaign with equal or lower ROAS | Such moves are skipped |
+| PII-CARD-01 | Grouped card numbers (`4111 1111 1111 1111`) passed unredacted | Card pattern applied before the phone pattern |
+| SEC-PAREN-01 | The text check missed `FROM (campaigns)`; the authorizer still blocked it | Text check sees through parentheses and still allows subqueries |
+
+The "fictional" company name turned out to belong to real agencies and was
+replaced with an invented one (now Velquist Media).
 
 ## Docs
 
