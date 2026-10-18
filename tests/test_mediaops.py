@@ -2,8 +2,18 @@
 
 import pytest
 
-from mediaops import audit, demo_helpers, escalation, fatigue, feedback, pii, \
-    policysignal, reallocate, sop_rag, text2sql
+from mediaops import (
+    audit,
+    demo_helpers,
+    escalation,
+    fatigue,
+    feedback,
+    pii,
+    policysignal,
+    reallocate,
+    sop_rag,
+    text2sql,
+)
 from mediaops.telemetry import build_db
 from mediaops.views import GatewayError, create_views, run_query
 
@@ -21,7 +31,9 @@ def test_seed_is_deterministic(conn):
     c2 = build_db()
     n1 = conn.execute("SELECT COUNT(*) n FROM creative_daily").fetchone()["n"]
     n2 = c2.execute("SELECT COUNT(*) n FROM creative_daily").fetchone()["n"]
-    assert n1 == n2 == 12 * 14
+    # No delivery before a campaign starts: CMP-003 (day 5) skips 4 days x 3
+    # creatives, paused CMP-004 (day 20) has none (MEDIA-SEED-01).
+    assert n1 == n2 == 12 * 14 - 4 * 3 - 14
 
 
 def test_hero_campaign_anchor(conn):
@@ -355,3 +367,71 @@ def test_demo_fatigue_table(conn):
 def test_demo_reallocation_plan(conn):
     plan = demo_helpers.reallocation_plan(conn)
     assert plan["total_shifted"] > 0
+
+
+# ---------- review fixes (grokbot-portfolio, 2026-10-18) ----------
+def test_no_delivery_before_campaign_start(conn):
+    early = conn.execute(
+        "SELECT COUNT(*) FROM creative_daily d JOIN creatives cr USING (creative_id) "
+        "JOIN ad_sets a USING (ad_set_id) JOIN campaigns c USING (campaign_id) "
+        "WHERE d.day < c.start_day").fetchone()[0]
+    assert early == 0
+
+
+def test_pacing_paused_campaign_is_not_overspending(conn):
+    rows = {r["campaign_id"]: dict(r) for r in conn.execute("SELECT * FROM v_budget_pacing")}
+    assert rows["CMP-004"]["pacing_status"] == "paused"
+    assert all((r["expected_spend"] or 0) >= 0 for r in rows.values())
+    assert {r["pacing_status"] for k, r in rows.items() if k != "CMP-004"} == \
+        {"on_track", "overspending", "underspending"}
+
+
+def test_spend_anomalies_exclude_paused_and_on_track(conn):
+    out = text2sql.answer(conn, "any spend anomalies?")
+    assert sorted(r["campaign_id"] for r in out["rows"]) == ["CMP-002", "CMP-003"]
+
+
+def test_gate_uses_real_move_size(conn):
+    from mediaops.orchestrator import Orchestrator
+    r = Orchestrator(conn, approver=lambda _p: True).ask("reallocate budget")
+    moves = r["tools"][-1]["moves"]
+    for m in moves:
+        assert m["amount_pct"] == round(reallocate.move_pct(conn, m), 4)
+        assert m["gate"]["tier"] == ("T3" if m["amount_pct"] > 0.20 else "T2")
+    big = {"from_campaign": "CMP-002", "to_campaign": "CMP-003", "amount": 5000.0}
+    assert reallocate.move_pct(conn, big) == 0.5  # 5000 / CMP-002's 10000 budget
+    assert escalation.classify_tier("budget_shift", 0.5) == "T3"
+
+
+def test_no_moves_between_equal_roas(conn):
+    conn.execute("UPDATE creative_daily SET spend = 100.0, conversions = 4")
+    assert reallocate.plan_reallocation(conn)["moves"] == []
+
+
+def test_gate_times_out_fail_closed():
+    import time
+    gate = escalation.ConfirmationGate(timeout_s=0.1, approver=lambda _p: time.sleep(2) or True)
+    t0 = time.perf_counter()
+    out = gate.request("pause_campaign", {"q": "pause CMP-001"})
+    assert out["approved"] is False and out["timed_out"] is True
+    assert time.perf_counter() - t0 < 1.0
+
+
+def test_gate_truthy_non_true_answer_is_not_approval():
+    gate = escalation.ConfirmationGate(approver=lambda _p: "no")
+    assert gate.request("pause_campaign", {"q": "x"})["approved"] is False
+
+
+def test_grouped_card_numbers_redacted():
+    for raw in ("card 4111 1111 1111 1111", "card 4111-1111-1111-1111"):
+        text, n = pii.scrub(raw)
+        assert text == "card [CARD]" and n == 1
+    assert pii.scrub("on 2026-10-18, 1,234,567 impressions") == ("on 2026-10-18, 1,234,567 impressions", 0)
+
+
+def test_text_check_sees_parentheses_but_allows_subqueries(conn):
+    for sql in ("SELECT * FROM (campaigns)", 'SELECT * FROM ("campaigns")'):
+        with pytest.raises(GatewayError, match="SEC-SELECT-03"):
+            run_query(conn, sql)
+    _cols, rows = run_query(conn, "SELECT * FROM (SELECT campaign_id FROM v_campaign_roas)")
+    assert len(rows) == 4

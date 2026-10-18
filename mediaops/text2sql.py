@@ -63,7 +63,7 @@ def _spend_anomalies(q: str) -> str:
     # Campaigns whose pacing ratio is far off 1.0 are the spend anomalies.
     return ("SELECT campaign_id, name, budget_total, spent_to_date, "
             "pacing_ratio, pacing_status FROM v_budget_pacing "
-            "WHERE pacing_status != 'on_track'")
+            "WHERE pacing_status IN ('overspending', 'underspending')")
 
 
 def answer(conn: sqlite3.Connection, question: str) -> dict:

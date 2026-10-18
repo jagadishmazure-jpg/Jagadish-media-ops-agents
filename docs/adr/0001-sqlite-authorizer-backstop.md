@@ -43,3 +43,15 @@ that need every row read the database directly, not through the gateway.
   during view expansion and allows them via the `source` rule.
 - The authorizer is registered only inside the `views_only` context and
   cleared on exit, so engine writes are unaffected.
+
+## Revision (2026-10-18, standardization review)
+
+- `mediaops/authz.py` is now the shared portfolio template (v3). It adds an
+  explicit `load_extension` deny and always denies the schema tables, even
+  if one is ever listed as allowed.
+- `tests/test_authorizer_strict.py` repeats every bypass form with the text
+  check switched off, alongside `tests/test_gateway_backstop.py`.
+- The text check now also sees through parentheses (`FROM (campaigns)`);
+  before, only the authorizer caught that form.
+- Residual, accepted: a column-free `count(*)` on a base table can reveal a
+  row count, never values. The text check blocks the plain form.

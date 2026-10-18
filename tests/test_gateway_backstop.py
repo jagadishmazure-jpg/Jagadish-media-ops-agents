@@ -6,8 +6,7 @@ import pytest
 
 from mediaops.authz import views_only
 from mediaops.telemetry import build_db
-from mediaops.views import ALLOWED_VIEWS, GatewayError, \
-    create_views, run_query
+from mediaops.views import ALLOWED_VIEWS, GatewayError, create_views, run_query
 
 
 @pytest.fixture()

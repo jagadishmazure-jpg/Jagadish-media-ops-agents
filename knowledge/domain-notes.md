@@ -2,7 +2,7 @@
 
 ## The business
 
-Brightwave Media (fictional) runs paid campaigns across social and search
+Velquist Media (fictional) runs paid campaigns across social and search
 inventory. The ad-ops team owns: hitting ROAS targets, keeping spend on
 pacing, refreshing fatigued creatives, and reporting to stakeholders.
 

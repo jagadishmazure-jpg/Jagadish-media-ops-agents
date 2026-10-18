@@ -53,34 +53,33 @@ def create_views(con: sqlite3.Connection) -> None:
                ROUND(SUM(d.conversions) * 50.0, 2) AS revenue,
                ROUND(SUM(d.conversions) * 50.0 / NULLIF(SUM(d.spend), 0), 2) AS roas
         FROM campaigns c
-        JOIN ad_sets a ON a.campaign_id = c.campaign_id
-        JOIN creatives cr ON cr.ad_set_id = a.ad_set_id
-        JOIN creative_daily d ON d.creative_id = cr.creative_id
+        LEFT JOIN ad_sets a ON a.campaign_id = c.campaign_id
+        LEFT JOIN creatives cr ON cr.ad_set_id = a.ad_set_id
+        LEFT JOIN creative_daily d ON d.creative_id = cr.creative_id
         GROUP BY c.campaign_id;
 
         CREATE VIEW IF NOT EXISTS v_budget_pacing AS
-        SELECT c.campaign_id, c.name, c.status, c.budget_total,
-               ROUND(SUM(d.spend), 2) AS spent_to_date,
-               14 AS day_today, c.start_day, c.end_day,
-               ROUND(c.budget_total * (14 - c.start_day + 1) * 1.0
-                     / NULLIF(c.end_day - c.start_day + 1, 0), 2) AS expected_spend,
-               ROUND(SUM(d.spend) / NULLIF(
-                     c.budget_total * (14 - c.start_day + 1) * 1.0
-                     / NULLIF(c.end_day - c.start_day + 1, 0), 0), 2) AS pacing_ratio,
-               CASE WHEN SUM(d.spend) >
-                         1.15 * c.budget_total * (14 - c.start_day + 1) * 1.0
-                         / NULLIF(c.end_day - c.start_day + 1, 0)
-                    THEN 'overspending'
-                    WHEN SUM(d.spend) <
-                         0.85 * c.budget_total * (14 - c.start_day + 1) * 1.0
-                         / NULLIF(c.end_day - c.start_day + 1, 0)
-                    THEN 'underspending'
+        SELECT campaign_id, name, status, budget_total, spent_to_date,
+               14 AS day_today, start_day, end_day, expected_spend,
+               CASE WHEN expected_spend > 0
+                    THEN ROUND(spent_to_date / expected_spend, 2) END AS pacing_ratio,
+               CASE WHEN status != 'active' THEN status
+                    WHEN start_day > 14 THEN 'not_started'
+                    WHEN spent_to_date > 1.15 * expected_spend THEN 'overspending'
+                    WHEN spent_to_date < 0.85 * expected_spend THEN 'underspending'
                     ELSE 'on_track' END AS pacing_status
-        FROM campaigns c
-        JOIN ad_sets a ON a.campaign_id = c.campaign_id
-        JOIN creatives cr ON cr.ad_set_id = a.ad_set_id
-        JOIN creative_daily d ON d.creative_id = cr.creative_id
-        GROUP BY c.campaign_id;
+        FROM (
+            SELECT c.campaign_id, c.name, c.status, c.budget_total,
+                   c.start_day, c.end_day,
+                   ROUND(COALESCE(SUM(d.spend), 0), 2) AS spent_to_date,
+                   ROUND(c.budget_total * MAX(0, MIN(14, c.end_day) - c.start_day + 1) * 1.0
+                         / NULLIF(c.end_day - c.start_day + 1, 0), 2) AS expected_spend
+            FROM campaigns c
+            LEFT JOIN ad_sets a ON a.campaign_id = c.campaign_id
+            LEFT JOIN creatives cr ON cr.ad_set_id = a.ad_set_id
+            LEFT JOIN creative_daily d ON d.creative_id = cr.creative_id
+            GROUP BY c.campaign_id
+        );
 
         CREATE VIEW IF NOT EXISTS v_creative_fatigue AS
         SELECT cr.creative_id, cr.name, cr.format, a.campaign_id,
@@ -126,6 +125,9 @@ _WRITE_RE = re.compile(
     re.IGNORECASE,
 )
 _FROM_JOIN_RE = re.compile(r"\b(?:from|join)\b", re.IGNORECASE)
+# Whitespace, comment markers, quotes, brackets and parentheses that may sit
+# between FROM/JOIN and the table name (``FROM ("t")`` included).
+_LEAD_RE = re.compile(r"""^[\s/*"'\[\]()`]+""")
 _UNQUOTE_RE = re.compile(r"""^["'\[]|["'\]]$""")
 
 
@@ -148,9 +150,9 @@ def _referenced_tables(sql: str) -> set:
     is the backstop for anything this misses."""
     tables = set()
     for m in _FROM_JOIN_RE.finditer(sql):
-        rest = sql[m.end():].lstrip(" \t\r\n/**/\"'[]")
+        rest = _LEAD_RE.sub("", sql[m.end():])
         name = re.match(r"[A-Za-z_][\w$]*", rest)
-        if name:
+        if name and name.group(0).lower() not in ("select", "with", "values"):
             tables.add(_unquote(name.group(0)))
     return tables
 
@@ -194,12 +196,12 @@ def run_query(conn: sqlite3.Connection, sql: str):
                 if denied:
                     raise GatewayError(
                         "SEC-SELECT-03: denied by database authorizer: "
-                        + ", ".join(sorted(set(denied))))
-                raise GatewayError(f"SEC-SELECT-03: query failed: {e}")
+                        + ", ".join(sorted(set(denied)))) from None
+                raise GatewayError(f"SEC-SELECT-03: query failed: {e}") from None
             cols = [d[0] for d in cur.description] if cur.description else []
             rows = cur.fetchmany(ROW_CAP + 1)[:ROW_CAP]
     except GatewayError:
         raise
     except sqlite3.Error as e:
-        raise GatewayError(f"SEC-SELECT-01: query failed: {e}")
+        raise GatewayError(f"SEC-SELECT-01: query failed: {e}") from None
     return cols, rows

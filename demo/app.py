@@ -7,12 +7,12 @@ All logic lives in mediaops.demo_helpers (stdlib, fully tested).
 try:
     import streamlit as st
 except ImportError:  # pragma: no cover
-    raise SystemExit("pip install streamlit, then run: streamlit run demo/app.py")
+    raise SystemExit("pip install streamlit, then run: streamlit run demo/app.py") from None
 
 from mediaops import demo_helpers
 
-st.set_page_config(page_title="Brightwave Media — Ad Ops Agents", layout="wide")
-st.title("Brightwave Media — Ad Operations Agents (synthetic demo)")
+st.set_page_config(page_title="Velquist Media — Ad Ops Agents", layout="wide")
+st.title("Velquist Media — Ad Operations Agents (synthetic demo)")
 
 conn = demo_helpers.demo_db()
 q = st.selectbox("Ask the ops agent", demo_helpers.DEFAULT_QUESTIONS)
